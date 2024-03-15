@@ -3,48 +3,37 @@
 #include <string.h>
 #include <inttypes.h>
 #include <stdbool.h>
-
+#include <assert.h>
 #include "libtg.h"
 CURL *tg_curl;
 tg_Buffer tg_buffer;
 char *tg_token;
 unsigned int tg_last_update_id;
-int tg_sbs_count = 1;
-tg_StaticBehaviour *tg_sbs;
 
-void tg_AddStaticBehaviour(char *command, char*(*func)(void))
-{
-    tg_sbs[tg_sbs_count-1] = (tg_StaticBehaviour){
-        .command = strdup(command),
-        .func = func
-    };
-    tg_sbs_count++;
-    tg_sbs = realloc(tg_sbs, sizeof(tg_StaticBehaviour)*tg_sbs_count);
+#define JOBJ_GET_INT(jobj, str) (json_object_get_int(json_object_object_get(jobj, str)))
+#define JOBJ_GET_STR(jobj, str) (json_object_get_string(json_object_object_get(jobj, str)))
+#define JOBJ_GET_BOOL(jobj, str) (json_object_get_boolean(json_object_object_get(jobj, str)))
+
+#define SET_STR_IF_EXISTS(val, jobj, str) { \
+    struct json_object* tmp = json_object_object_get(jobj, str); \
+    if(tmp){ \
+        val = strdup(JOBJ_GET_STR(jobj, str)); \
+    } \
 }
-
-void tg_ReplyStatic(tg_Message msg)
-{
-    for (int i = 0; i < tg_sbs_count-1; i++) {
-        if(strcmp(tg_sbs[i].command, msg.text)==0){
-            tg_SendMessage(tg_sbs[i].func(), msg.chat_id);
-            return;
-        }
-    }
-    tg_SendMessage("Unknown Command", msg.chat_id);
+#define SET_INT_IF_EXISTS(val, jobj, str) { \
+    struct json_object* tmp = json_object_object_get(jobj, str); \
+    if(tmp){ \
+        val = JOBJ_GET_INT(jobj, str); \
+    } \
 }
-
-bool tg_IsStaticBehaviour(tg_Message msg)
-{
-    for (int i = 0; i < tg_sbs_count-1; i++) {
-        if(strcmp(tg_sbs[i].command, msg.text)==0){
-            return true;
-        }
-    }
-    return false;
+#define SET_BOOL_IF_EXISTS(val, jobj, str) { \
+    struct json_object* tmp = json_object_object_get(jobj, str); \
+    if(tmp){ \
+        val = JOBJ_GET_BOOL(jobj, str); \
+    } \
 }
 int tg_InitBot(const char *token)
 {
-    tg_sbs = malloc(sizeof(tg_StaticBehaviour));
     tg_last_update_id = 0;
     tg_token = strdup(token);
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -65,13 +54,81 @@ void tg_StopBot(void)
 }
 void tg_FreeMessage(tg_Message *msg)
 {
-    free(msg->username);
+    // TODO: finish
+    free(msg->from.username);
     free(msg->text);
 }
+
+tg_PhotoSize _tg_ParsePhotoSize(struct json_object *jobj_photo_size)
+{
+    // I have no idea why that guys from telegram called it photo size when it is just photo.
+    // Its my code and I do what I wanna do, were balling
+    tg_PhotoSize photo = {0};
+    photo.file_id = strdup(JOBJ_GET_STR(jobj_photo_size, "file_id"));
+    photo.file_unique_id = strdup(JOBJ_GET_STR(jobj_photo_size, "file_unique_id"));
+    photo.width = JOBJ_GET_INT(jobj_photo_size, "width");
+    photo.height = JOBJ_GET_INT(jobj_photo_size, "height");
+    photo.file_size = JOBJ_GET_INT(jobj_photo_size, "file_size");
+    return photo;
+}
+
+tg_Sticker _tg_ParseSticker(json_object *jobj_sticker)
+{
+    tg_Sticker sticker = {0};
+    sticker.file_id = strdup(JOBJ_GET_STR(jobj_sticker, "file_id"));
+    sticker.file_unique_id = strdup(JOBJ_GET_STR(jobj_sticker, "file_unique_id"));
+    sticker.type = strdup(JOBJ_GET_STR(jobj_sticker, "type"));
+    sticker.width = JOBJ_GET_INT(jobj_sticker, "width");
+    sticker.height = JOBJ_GET_INT(jobj_sticker, "height");
+    sticker.is_animated = JOBJ_GET_BOOL(jobj_sticker, "is_animated");
+    sticker.is_video = JOBJ_GET_BOOL(jobj_sticker, "is_video");
+    sticker.thumbnail = _tg_ParsePhotoSize(json_object_object_get(jobj_sticker, "thumbnail"));
+    SET_STR_IF_EXISTS(sticker.emoji, jobj_sticker, "emoji");
+    SET_STR_IF_EXISTS(sticker.set_name, jobj_sticker, "set_name");
+    SET_STR_IF_EXISTS(sticker.custom_emoji_id, jobj_sticker, "custom_emoji_id");
+    SET_BOOL_IF_EXISTS(sticker.needs_repainting, jobj_sticker, "needs_repainting");
+    SET_INT_IF_EXISTS(sticker.file_size, jobj_sticker, "file_size");
+    return sticker;
+}
+tg_Chat _tg_ParseChat(struct json_object *jobj_chat){
+    tg_Chat chat = {0};
+    chat.id = JOBJ_GET_INT(jobj_chat, "id");
+    chat.type = strdup(JOBJ_GET_STR(jobj_chat, "type"));
+    SET_STR_IF_EXISTS(chat.title, jobj_chat, "title");
+    SET_STR_IF_EXISTS(chat.username, jobj_chat, "username");
+    SET_STR_IF_EXISTS(chat.first_name, jobj_chat, "first_name");
+    SET_STR_IF_EXISTS(chat.last_name, jobj_chat, "last_name");
+    SET_BOOL_IF_EXISTS(chat.is_forum, jobj_chat, "is_forum");
+    // chat.photo = _tg_ParseChatPhoto(jobj_chat);
+    // chat.active_usernames = _tg_ParseActiveUsernames();
+    // chat.available_reactions = _tg_ParseReactionTypes();
+    SET_INT_IF_EXISTS(chat.accent_color_id, jobj_chat, "accent_color_id");
+    SET_STR_IF_EXISTS(chat.background_custom_emoji_id, jobj_chat, "background_custom_emoji_id");
+    SET__IF_EXISTS(chat., jobj_chat, "");
+    //TODO: finish
+    return chat;
+}
+tg_Message _tg_ParseMessage(struct json_object *jobj_message_container){
+    tg_Message msg = {0};
+    struct json_object *jobj_message = json_object_object_get(jobj_message_container, "message");
+    struct json_object *jobj_chat    = json_object_object_get(jobj_message, "chat");
+    // type = text
+    SET_STR_IF_EXISTS(msg.text, jobj_message, "text");
+    struct json_object *jobj_message_sticker = json_object_object_get(jobj_message, "sticker");
+    if(jobj_message_sticker){
+        msg.sticker = _tg_ParseSticker(jobj_message_sticker);
+    }
+    msg.message_id = JOBJ_GET_INT(jobj_message, "message_id");
+    msg.date = JOBJ_GET_INT(jobj_message_container, "date");
+    msg.chat = _tg_ParseChat(json_object_object_get(jobj_message, "chat"));
+    msg.chat.type = strdup(JOBJ_GET_STR(jobj_chat, "type"));
+    return msg;
+}
+
 tg_Messages tg_GetMessages(void)
 {
     CURLcode res;
-    tg_Messages msg = {.msg = NULL, .count=0};
+    tg_Messages msgs = {.msg = NULL, .count=0};
     char *url = malloc(512*sizeof(char));
     sprintf(url, "https://api.telegram.org/bot%s/getUpdates?offset=%d", tg_token, tg_last_update_id+1);
     curl_easy_setopt(tg_curl, CURLOPT_URL, url);
@@ -81,66 +138,15 @@ tg_Messages tg_GetMessages(void)
     struct json_object *jobj_root = json_tokener_parse(tg_buffer.data);
     struct json_object *jobj_result = json_object_object_get(jobj_root, "result");
     int messages_count = json_object_array_length(jobj_result);
-    msg.msg = malloc(sizeof(tg_Message)*messages_count);
-    msg.count = messages_count;
+    msgs.msg = malloc(sizeof(tg_Message)*messages_count);
+    msgs.count = messages_count;
     for (int i = 0; i < messages_count; i++) {
         struct json_object *jobj_message_container = json_object_array_get_idx(jobj_result, i);
-        struct json_object *jobj_message      = json_object_object_get(jobj_message_container, "message");
-        struct json_object *jobj_message_id   = json_object_object_get(jobj_message_container, "message_id");
-        struct json_object *jobj_update_id    = json_object_object_get(jobj_message_container, "update_id");
-        struct json_object *jobj_chat_id      = json_object_object_get(
-                                                            json_object_object_get(jobj_message, "chat"), "id");
-        struct json_object *jobj_from         = json_object_object_get(jobj_message, "from");
-        struct json_object *jobj_user_nick    = json_object_object_get(jobj_from, "username");
-        // Getting mesage type
-        struct json_object *jobj_message_text = json_object_object_get(jobj_message, "text");
-        struct json_object *jobj_message_sticker = json_object_object_get(jobj_message, "sticker");
-        struct json_object *jobj_message_animation  = json_object_object_get(jobj_message, "animation");
-        struct json_object *jobj_message_audio      = json_object_object_get(jobj_message, "audio");
-        struct json_object *jobj_message_document   = json_object_object_get(jobj_message, "document");
-        struct json_object *jobj_message_photo      = json_object_object_get(jobj_message, "photo");
-        struct json_object *jobj_message_story      = json_object_object_get(jobj_message, "story");
-        struct json_object *jobj_message_video      = json_object_object_get(jobj_message, "video");
-        struct json_object *jobj_message_video_note = json_object_object_get(jobj_message, "video_note");
-        struct json_object *jobj_message_voice     = json_object_object_get(jobj_message, "");
-        if(jobj_message_text){
-            if(jobj_user_nick){
-                msg.msg[i].username = strdup(json_object_get_string(jobj_user_nick));
-            }
-            msg.msg[i].type     = MSG_TEXT;
-            msg.msg[i].text     = strdup(json_object_get_string(jobj_message_text));
-        } else if(jobj_message_sticker){
-            msg.msg[i].type = MSG_STICKER;
-            struct json_object *jobj_message_sticker_emoji = json_object_object_get(jobj_message_sticker, "emoji");
-            msg.msg[i].sticker = strdup(json_object_get_string(jobj_message_sticker_emoji));
-            msg.msg[i].username   = strdup(json_object_get_string(jobj_user_nick));
-        } else if (jobj_message_animation){
-            msg.msg[i].type = MSG_ANIMATION;
-        } else if (jobj_message_audio){
-            msg.msg[i].type = MSG_AUDIO;
-        } else if (jobj_message_document){
-            msg.msg[i].type = MSG_DOCUMENT;
-        } else if (jobj_message_photo){
-            msg.msg[i].type = MSG_PHOTO;
-        } else if (jobj_message_story){
-            msg.msg[i].type = MSG_STORY;
-        } else if (jobj_message_video){
-            msg.msg[i].type = MSG_VIDEO;
-        } else if (jobj_message_video_note){
-            msg.msg[i].type = MSG_VIDEO_NOTE;
-        } else if (jobj_message_voice){
-            msg.msg[i].type = MSG_VOICE;
-        } else {
-            msg.msg[i].type = MSG_UNKNOWN;
-        }
-
-        msg.msg[i].message_id = json_object_get_int64(jobj_message_id);
-        msg.msg[i].chat_id    = json_object_get_int64(jobj_chat_id);
-        // last update id update
-        tg_last_update_id = json_object_get_int(jobj_update_id);
+        msgs.msg[i] = _tg_ParseMessage(jobj_message_container);
+        tg_last_update_id = JOBJ_GET_INT(jobj_message_container, "update_id");
     }
     free(url);
-    return msg;
+    return msgs;
 }
 
 void tg_SendMessage(const char *message, u_int64_t chat_id)
@@ -155,6 +161,7 @@ void tg_SendMessage(const char *message, u_int64_t chat_id)
     if (res != CURLE_OK)
         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
 }
+
 size_t tg_MessageBufferer(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     struct Buffer *mem = (struct Buffer *)userp;
